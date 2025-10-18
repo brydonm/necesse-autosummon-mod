@@ -15,6 +15,13 @@ import net.bytebuddy.asm.Advice;
 public class AutoSummonPatch {
 
     public static long nextCheckTime = 0;
+    
+    /**
+     * Clear all SummonedMobBuff stacks from the player and despawn followers
+     */
+    public static void clearSummonBuffs(PlayerMob player) {
+        player.buffManager.removeBuff("summonedmob", true);
+    }
 
     /**
      * This code runs after the original clientTick method.
@@ -30,6 +37,11 @@ public class AutoSummonPatch {
         if (AutoSummonConfig.checkAndClearNeedsChatMessage()) {
             String status = AutoSummonConfig.isEnabled() ? "ON" : "OFF";
             String message = "[Auto Summon] " + status;
+            
+            // If turning off, clear all summon buffs
+            if (!AutoSummonConfig.isEnabled()) {
+                clearSummonBuffs(player);
+            }
             
             // Send to global chat using the client's chat system
             if (player.getLevel().isClient() && player.getLevel().getClient() != null) {
