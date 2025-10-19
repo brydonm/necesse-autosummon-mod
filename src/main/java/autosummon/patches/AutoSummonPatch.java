@@ -6,15 +6,17 @@ import necesse.entity.mobs.PlayerMob;
 import necesse.inventory.InventoryItem;
 import necesse.inventory.item.toolItem.summonToolItem.SummonToolItem;
 import net.bytebuddy.asm.Advice;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * This patch automatically summons using the rightmost staff in inventory when below max summons.
- * It targets the clientTick method in the PlayerMob class.
+ * It targets the clientTick method in the PlayerMob class with proper multiplayer isolation.
  */
 @ModMethodPatch(target = PlayerMob.class, name = "clientTick", arguments = {})
 public class AutoSummonPatch {
 
-    public static long nextCheckTime = 0;
+    // Per-player cooldown tracking to prevent multiplayer interference
+    public static final ConcurrentHashMap<Integer, Long> playerCooldowns = new ConcurrentHashMap<>();
     
     /**
      * Clear all SummonedMobBuff stacks from the player and despawn followers
@@ -24,12 +26,32 @@ public class AutoSummonPatch {
     }
 
     /**
+     * Clean up old player cooldowns to prevent memory leaks
+     */
+    public static void cleanupOldCooldowns(long currentTime) {
+        // Remove cooldowns older than 10 seconds to prevent memory leaks
+        long cleanupThreshold = currentTime - 10000; // 10 seconds in milliseconds
+        playerCooldowns.entrySet().removeIf(entry -> entry.getValue() < cleanupThreshold);
+    }
+
+    /**
      * This code runs after the original clientTick method.
+     * It processes auto-summoning for the local player with proper multiplayer isolation.
      */
     @Advice.OnMethodExit
     static void onExit(@Advice.This PlayerMob player) {        
         // We only want this logic to run for the client who is controlling the player
-        if (!player.isClient() || !player.isPlayer) {
+        if (player == null || !player.isClient() || !player.isPlayer) {
+            return;
+        }
+
+        // Additional validation: ensure this is the local player
+        if (player.getLevel() == null || !player.getLevel().isClient()) {
+            return;
+        }
+
+        // CRITICAL: Only run for the actual local player, not other players
+        if (player.getLevel().getClient() == null || player.getLevel().getClient().getPlayer() != player) {
             return;
         }
 
@@ -44,9 +66,9 @@ public class AutoSummonPatch {
             }
             
             // Send to global chat using the client's chat system
-            if (player.getLevel().isClient() && player.getLevel().getClient() != null) {
+            if (player.getLevel() != null && player.getLevel().isClient() && player.getLevel().getClient() != null) {
                 necesse.engine.network.client.Client client = player.getLevel().getClient();
-                if (client.chat != null) {
+                if (client != null && client.chat != null) {
                     client.chat.addMessage(message);
                 }
             }
@@ -57,13 +79,20 @@ public class AutoSummonPatch {
             return;
         }
 
+        // Get player-specific cooldown
+        int playerId = player.getUniqueID();
         long currentTime = player.getWorldEntity().getTime();
-        if (currentTime < nextCheckTime) {
-            return; // Don't run if we're on cooldown
+        
+        // Clean up old cooldowns periodically to prevent memory leaks
+        cleanupOldCooldowns(currentTime);
+        
+        Long lastCheckTime = playerCooldowns.get(playerId);
+        
+        if (lastCheckTime != null && currentTime < lastCheckTime) {
+            return; // Don't run if this player is on cooldown
         }
 
         // Check if the player is below their max summon count
-        // We'll count SummonedMobBuff buff stacks to track current summons
         int currentSummons = 0;
         for (necesse.entity.mobs.buffs.ActiveBuff buff : player.buffManager.getArrayBuffs()) {
             if (buff.buff instanceof necesse.entity.mobs.buffs.staticBuffs.SummonedMobBuff) {
@@ -77,29 +106,20 @@ public class AutoSummonPatch {
             for (int i = 9; i >= 0; i--) {
                 InventoryItem hotbarItem = player.getInv().main.getItem(i);
 
-                // Check if the slot contains a summoning staff
                 if (hotbarItem != null && hotbarItem.item instanceof SummonToolItem) {
                     SummonToolItem staff = (SummonToolItem) hotbarItem.item;
-
-                    // The canAttack method checks for things like mana, cooldowns, and other restrictions.
-                    // If it returns null, it means the staff can be used.
                     String canAttackResult = staff.canAttack(player.getLevel(), (int)player.getX(), (int)player.getY(), player, hotbarItem);
                     
                     if (canAttackResult == null) {
-                        // Use the staff from the hotbar slot we found. Target coordinates don't matter much.
-                        // Try using the player's attack system instead of calling onAttack directly
-                        try {
-                            // Use the player's tryAttack method which should handle summoning properly
+                        // Final safety check: ensure this is still the local player
+                        if (player.getLevel().getClient() != null && player.getLevel().getClient().getPlayer() == player) {
                             necesse.inventory.PlayerInventorySlot slot = new necesse.inventory.PlayerInventorySlot(player.getInv().main, i);
                             player.tryAttack(slot, (int)player.getX(), (int)player.getY());
-                        } catch (Exception e) {
-                            System.err.println("AutoSummonPatch: tryAttack failed: " + e.getMessage());
+
+                            // Set the cooldown for this specific player to avoid using all staffs instantly
+                            playerCooldowns.put(playerId, currentTime + AutoSummonConfig.getSummonCheckCooldown());
                         }
 
-                        // Set the cooldown for the next check to avoid using all staffs instantly
-                        nextCheckTime = currentTime + AutoSummonConfig.getSummonCheckCooldown();
-
-                        // Break the loop so we only summon one minion per check
                         break;
                     }
                 }
