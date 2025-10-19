@@ -7,6 +7,8 @@ import necesse.inventory.InventoryItem;
 import necesse.inventory.item.toolItem.summonToolItem.SummonToolItem;
 import net.bytebuddy.asm.Advice;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * This patch automatically summons using the rightmost staff in inventory when below max summons.
@@ -17,6 +19,9 @@ public class AutoSummonPatch {
 
     // Per-player cooldown tracking to prevent multiplayer interference
     public static final ConcurrentHashMap<Integer, Long> playerCooldowns = new ConcurrentHashMap<>();
+    
+    // Timer for delayed clearing
+    private static Timer clearTimer = new Timer("AutoSummonClearTimer", true);
     
     /**
      * Clear all SummonedMobBuff stacks from the player and despawn followers
@@ -32,6 +37,21 @@ public class AutoSummonPatch {
         // Remove cooldowns older than 10 seconds to prevent memory leaks
         long cleanupThreshold = currentTime - 10000; // 10 seconds in milliseconds
         playerCooldowns.entrySet().removeIf(entry -> entry.getValue() < cleanupThreshold);
+    }
+    
+    /**
+     * Schedule delayed clearing of summon buffs (like setTimeout in JS)
+     */
+    public static void scheduleDelayedClear(PlayerMob player) {
+        clearTimer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                // Only clear if the mod is still disabled
+                if (!AutoSummonConfig.isEnabled()) {
+                    clearSummonBuffs(player);
+                }
+            }
+        }, 500); // 500ms delay
     }
 
     /**
@@ -60,9 +80,9 @@ public class AutoSummonPatch {
             String status = AutoSummonConfig.isEnabled() ? "ON" : "OFF";
             String message = "[Auto Summon] " + status;
             
-            // If turning off, clear all summon buffs
+            // If turning off, schedule delayed clearing (like setTimeout in JS)
             if (!AutoSummonConfig.isEnabled()) {
-                clearSummonBuffs(player);
+                scheduleDelayedClear(player);
             }
             
             // Send to global chat using the client's chat system
