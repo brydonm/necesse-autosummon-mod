@@ -11,18 +11,20 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 /**
- * This patch automatically summons using the rightmost staff in inventory when below max summons.
- * It targets the clientTick method in the PlayerMob class with proper multiplayer isolation.
+ * This patch automatically summons using the rightmost staff in inventory when
+ * below max summons.
+ * It targets the clientTick method in the PlayerMob class with proper
+ * multiplayer isolation.
  */
 @ModMethodPatch(target = PlayerMob.class, name = "clientTick", arguments = {})
 public class AutoSummonPatch {
 
     // Per-player cooldown tracking to prevent multiplayer interference
     public static final ConcurrentHashMap<Integer, Long> playerCooldowns = new ConcurrentHashMap<>();
-    
+
     // Timer for delayed clearing
     private static Timer clearTimer = new Timer("AutoSummonClearTimer", true);
-    
+
     /**
      * Clear all SummonedMobBuff stacks from the player and despawn followers
      */
@@ -38,7 +40,7 @@ public class AutoSummonPatch {
         long cleanupThreshold = currentTime - 10000; // 10 seconds in milliseconds
         playerCooldowns.entrySet().removeIf(entry -> entry.getValue() < cleanupThreshold);
     }
-    
+
     /**
      * Schedule delayed clearing of summon buffs (like setTimeout in JS)
      */
@@ -56,10 +58,11 @@ public class AutoSummonPatch {
 
     /**
      * This code runs after the original clientTick method.
-     * It processes auto-summoning for the local player with proper multiplayer isolation.
+     * It processes auto-summoning for the local player with proper multiplayer
+     * isolation.
      */
     @Advice.OnMethodExit
-    static void onExit(@Advice.This PlayerMob player) {        
+    static void onExit(@Advice.This PlayerMob player) {
         // We only want this logic to run for the client who is controlling the player
         if (player == null || !player.isClient() || !player.isPlayer) {
             return;
@@ -79,12 +82,12 @@ public class AutoSummonPatch {
         if (AutoSummonConfig.checkAndClearNeedsChatMessage()) {
             String status = AutoSummonConfig.isEnabled() ? "ON" : "OFF";
             String message = "[Auto Summon] " + status;
-            
+
             // If turning off, schedule delayed clearing (like setTimeout in JS)
             if (!AutoSummonConfig.isEnabled()) {
                 scheduleDelayedClear(player);
             }
-            
+
             // Send to global chat using the client's chat system
             if (player.getLevel() != null && player.getLevel().isClient() && player.getLevel().getClient() != null) {
                 necesse.engine.network.client.Client client = player.getLevel().getClient();
@@ -102,12 +105,12 @@ public class AutoSummonPatch {
         // Get player-specific cooldown
         int playerId = player.getUniqueID();
         long currentTime = player.getWorldEntity().getTime();
-        
+
         // Clean up old cooldowns periodically to prevent memory leaks
         cleanupOldCooldowns(currentTime);
-        
+
         Long lastCheckTime = playerCooldowns.get(playerId);
-        
+
         if (lastCheckTime != null && currentTime < lastCheckTime) {
             return; // Don't run if this player is on cooldown
         }
@@ -120,7 +123,7 @@ public class AutoSummonPatch {
             }
         }
         int maxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
-        
+
         if (currentSummons < maxSummons) {
             // Scan the hotbar from right to left (slot 9 to 0) to find the rightmost staff
             for (int i = 9; i >= 0; i--) {
@@ -128,13 +131,24 @@ public class AutoSummonPatch {
 
                 if (hotbarItem != null && hotbarItem.item instanceof SummonToolItem) {
                     SummonToolItem staff = (SummonToolItem) hotbarItem.item;
-                    String canAttackResult = staff.canAttack(player.getLevel(), (int)player.getX(), (int)player.getY(), player, hotbarItem);
-                    
+                    String canAttackResult = staff.canAttack(player.getLevel(), (int) player.getX(),
+                            (int) player.getY(), player, hotbarItem);
+
                     if (canAttackResult == null) {
                         // Final safety check: ensure this is still the local player
-                        if (player.getLevel().getClient() != null && player.getLevel().getClient().getPlayer() == player) {
-                            necesse.inventory.PlayerInventorySlot slot = new necesse.inventory.PlayerInventorySlot(player.getInv().main, i);
-                            player.tryAttack(slot, (int)player.getX(), (int)player.getY());
+                        if (player.getLevel().getClient() != null
+                                && player.getLevel().getClient().getPlayer() == player) {
+                            necesse.inventory.PlayerInventorySlot slot = new necesse.inventory.PlayerInventorySlot(
+                                    player.getInv().main, i);
+
+                            player.tryAttack(slot, (int) player.getX(), (int) player.getY());
+
+                            // Immediately try to stop any attack animation
+                            try {
+                                player.doAndSendStopAttackAttacker(true);
+                            } catch (Exception e) {
+                                // Ignore if method doesn't exist or fails
+                            }
 
                             // Set the cooldown for this specific player to avoid using all staffs instantly
                             playerCooldowns.put(playerId, currentTime + AutoSummonConfig.getSummonCheckCooldown());
