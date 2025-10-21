@@ -21,6 +21,9 @@ public class AutoSummonPatch {
 
     // Per-player cooldown tracking to prevent multiplayer interference
     public static final ConcurrentHashMap<Integer, Long> playerCooldowns = new ConcurrentHashMap<>();
+    
+    // Per-player tick counters for performance optimization when at max summons
+    public static final ConcurrentHashMap<Integer, Integer> playerTickCounters = new ConcurrentHashMap<>();
 
     // Timer for delayed clearing
     private static Timer clearTimer = new Timer("AutoSummonClearTimer", true);
@@ -39,6 +42,9 @@ public class AutoSummonPatch {
         // Remove cooldowns older than 10 seconds to prevent memory leaks
         long cleanupThreshold = currentTime - 10000; // 10 seconds in milliseconds
         playerCooldowns.entrySet().removeIf(entry -> entry.getValue() < cleanupThreshold);
+        
+        // Clean up tick counters for players who haven't been active recently
+        playerTickCounters.entrySet().removeIf(entry -> !playerCooldowns.containsKey(entry.getKey()));
     }
 
     /**
@@ -57,19 +63,77 @@ public class AutoSummonPatch {
     }
 
     /**
-     * Get the current summon count for the player using the buff bar method
+     * Get the current summon count for the player using the buff bar method (fast)
      * @param player The player to check
      * @return The current number of active summons
      */
-    public static int getCurrentSummonCount(PlayerMob player) {
+    public static int getCurrentSummonCountBuffBar(PlayerMob player) {
         int currentSummons = 0;
         for (necesse.entity.mobs.buffs.ActiveBuff buff : player.buffManager.getArrayBuffs()) {
             if (buff.buff instanceof necesse.entity.mobs.buffs.staticBuffs.SummonedMobBuff) {
                 currentSummons += buff.getStacks();
             }
         }
-        System.out.println("[Auto Summon] Current summons: " + currentSummons + " (using buff bar method)");
         return currentSummons;
+    }
+
+    /**
+     * Get the current summon count for the player by counting actual summoned mobs following them (accurate but slower)
+     * @param player The player to check
+     * @param staff The specific staff to check summons for
+     * @param hotbarItem The inventory item containing the staff
+     * @return The current number of active summons for this specific staff
+     */
+    public static int getCurrentSummonCountFollowers(PlayerMob player, SummonToolItem staff, InventoryItem hotbarItem) {
+        int currentSummons = 0;
+        
+        try {
+            // Get all mobs in the level
+            for (necesse.entity.mobs.Mob mob : player.getLevel().entityManager.mobs) {
+                if (mob instanceof necesse.entity.mobs.summon.SummonedMob) {
+                    // Check if this summoned mob is following our player
+                    necesse.entity.mobs.Mob followingMob = mob.getFollowingMob();
+                    if (followingMob == player) {
+                        // Check if this summoned mob was created by the specific staff
+                        if (isSummonedByStaff(mob, staff, hotbarItem)) {
+                            currentSummons++;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // If follower method fails, fall back to buff bar method
+            return getCurrentSummonCountBuffBar(player);
+        }
+        
+        return currentSummons;
+    }
+
+    /**
+     * Check if a summoned mob was created by a specific staff
+     * @param summonedMob The summoned mob to check
+     * @param staff The staff to check against
+     * @return True if the mob was summoned by this staff
+     */
+    private static boolean isSummonedByStaff(necesse.entity.mobs.Mob summonedMob, SummonToolItem staff, InventoryItem hotbarItem) {
+        try {
+            // Get the mob's string ID
+            String mobStringID = summonedMob.getStringID();
+            
+            // Get the staff's mobStringID (first parameter from super() call)
+            String staffMobStringID = staff.mobStringID;
+            
+            // Check if the mob's string ID matches the staff's mobStringID
+            if (mobStringID != null && staffMobStringID != null && mobStringID.equals(staffMobStringID)) {
+                return true;
+            }
+            
+            return false;
+                   
+        } catch (Exception e) {
+            // If all methods fail, assume it's not from this staff
+            return false;
+        }
     }
 
     /**
@@ -81,8 +145,6 @@ public class AutoSummonPatch {
      * @return The maximum summon count for this staff
      */
     public static int getStaffMaxSummons(SummonToolItem staff, PlayerMob player, InventoryItem hotbarItem, int playerMaxSummons) {
-        String staffName = staff.getDisplayName(hotbarItem);
-        
         try {
             // Try to get staff-specific summon count using reflection with correct parameters
             java.lang.reflect.Method getMaxSummonsMethod = staff.getClass().getMethod("getMaxSummons", InventoryItem.class, necesse.entity.mobs.itemAttacker.ItemAttackerMob.class);
@@ -91,7 +153,6 @@ public class AutoSummonPatch {
             if (result instanceof Integer) {
                 int staffMax = (Integer) result;
                 // If staff has its own max summon count, use that directly (don't limit by player max)
-                System.out.println("[Auto Summon] Staff max summons: " + staffMax + " (using staff's own limit) - " + staffName);
                 return staffMax;
             }
         } catch (Exception e) {
@@ -99,8 +160,35 @@ public class AutoSummonPatch {
         }
         
         // If we get here, the staff doesn't have its own max summon count, so use player's max
-        System.out.println("[Auto Summon] Staff max summons: " + playerMaxSummons + " (using player max) - " + staffName);
         return playerMaxSummons;
+    }
+
+    /**
+     * Check if the player is at max summons using the first found staff (performance optimization)
+     * @param player The player to check
+     * @return True if the first staff is at max capacity
+     */
+    public static boolean isAtMaxSummons(PlayerMob player) {
+        int playerMaxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
+        
+        // Find the first summoning staff in hotbar
+        for (int i = 9; i >= 0; i--) {
+            InventoryItem hotbarItem = player.getInv().main.getItem(i);
+            
+            if (hotbarItem != null && hotbarItem.item instanceof SummonToolItem) {
+                SummonToolItem staff = (SummonToolItem) hotbarItem.item;
+                int staffMaxSummons = getStaffMaxSummons(staff, player, hotbarItem, playerMaxSummons);
+                
+                // Use fast buff bar method for performance
+                int currentSummons = getCurrentSummonCountBuffBar(player);
+                
+                // Return true if this staff is at max capacity
+                return currentSummons >= staffMaxSummons;
+            }
+        }
+        
+        // No staffs found, skip anyway to prevent performance issues
+        return true;
     }
 
     /**
@@ -162,8 +250,29 @@ public class AutoSummonPatch {
             return; // Don't run if this player is on cooldown
         }
 
-        // Get current summon count more efficiently
-        int currentSummons = getCurrentSummonCount(player);
+        // Performance optimization: When at max summons, only run every 5 ticks
+        Integer tickCounter = playerTickCounters.get(playerId);
+        if (tickCounter == null) {
+            tickCounter = 0;
+        }
+        
+        // Check if we're at max summons (quick check)
+        boolean atMaxSummons = isAtMaxSummons(player);
+        
+        if (atMaxSummons) {
+            // Only run every 5 ticks when at max summons
+            tickCounter++;
+            if (tickCounter < 5) {
+                playerTickCounters.put(playerId, tickCounter);
+                return;
+            }
+            // Reset counter when we reach 5
+            tickCounter = 0;
+        }
+        
+        // Update tick counter
+        playerTickCounters.put(playerId, tickCounter);
+
         int playerMaxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
 
         // Scan the hotbar from right to left (slot 9 to 0) to find the rightmost staff
@@ -175,6 +284,18 @@ public class AutoSummonPatch {
                 
                 // Check if this staff has a custom summon count limit
                 int staffMaxSummons = getStaffMaxSummons(staff, player, hotbarItem, playerMaxSummons);
+                
+                // Use appropriate counting method based on whether staff has custom max
+                int currentSummons;
+                boolean staffHasCustomMax = !staff.drawMaxSummons; // drawMaxSummons = false means staff has custom limits
+                
+                if (staffHasCustomMax) {
+                    // Staff has its own max count, use accurate follower method
+                    currentSummons = getCurrentSummonCountFollowers(player, staff, hotbarItem);
+                } else {
+                    // Staff uses player max count, use fast buff bar method
+                    currentSummons = getCurrentSummonCountBuffBar(player);
+                }
                 
                 // Only proceed if we're below the staff's limit
                 if (currentSummons < staffMaxSummons) {
