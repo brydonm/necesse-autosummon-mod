@@ -146,6 +146,14 @@ public class AutoSummonPatch {
      */
     public static int getStaffMaxSummons(SummonToolItem staff, PlayerMob player, InventoryItem hotbarItem, int playerMaxSummons) {
         try {
+            // Check for global custom summon limit first
+            if (AutoSummonConfig.getSettings().hasGlobalCustomLimit()) {
+                // Only apply global limit to staffs that have their own counters (drawMaxSummons = false)
+                if (!staff.drawMaxSummons) {
+                    return AutoSummonConfig.getSettings().getGlobalCustomSummonLimit();
+                }
+            }
+            
             // Try to get staff-specific summon count using reflection with correct parameters
             java.lang.reflect.Method getMaxSummonsMethod = staff.getClass().getMethod("getMaxSummons", InventoryItem.class, necesse.entity.mobs.itemAttacker.ItemAttackerMob.class);
             Object result = getMaxSummonsMethod.invoke(staff, hotbarItem, player);
@@ -215,8 +223,15 @@ public class AutoSummonPatch {
 
         // Check if we need to send a chat message (from control activation)
         if (AutoSummonConfig.checkAndClearNeedsChatMessage()) {
-            String status = AutoSummonConfig.isEnabled() ? "ON" : "OFF";
-            String message = "[Auto Summon] " + status;
+            String message = AutoSummonConfig.getAndClearChatMessage();
+            if (message.isEmpty()) {
+                // Default toggle message
+                String status = AutoSummonConfig.isEnabled() ? "ON" : "OFF";
+                message = "[Auto Summon] " + status;
+            } else {
+                // Custom message
+                message = "[Auto Summon] " + message;
+            }
 
             // If turning off, schedule delayed clearing (like setTimeout in JS)
             if (!AutoSummonConfig.isEnabled()) {
