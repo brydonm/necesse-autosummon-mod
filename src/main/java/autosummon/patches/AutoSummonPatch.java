@@ -57,6 +57,53 @@ public class AutoSummonPatch {
     }
 
     /**
+     * Get the current summon count for the player using the buff bar method
+     * @param player The player to check
+     * @return The current number of active summons
+     */
+    public static int getCurrentSummonCount(PlayerMob player) {
+        int currentSummons = 0;
+        for (necesse.entity.mobs.buffs.ActiveBuff buff : player.buffManager.getArrayBuffs()) {
+            if (buff.buff instanceof necesse.entity.mobs.buffs.staticBuffs.SummonedMobBuff) {
+                currentSummons += buff.getStacks();
+            }
+        }
+        System.out.println("[Auto Summon] Current summons: " + currentSummons + " (using buff bar method)");
+        return currentSummons;
+    }
+
+    /**
+     * Get the maximum summon count for a specific staff, or fall back to player max count
+     * @param staff The summon staff to check
+     * @param player The player using the staff
+     * @param hotbarItem The inventory item containing the staff
+     * @param playerMaxSummons The player's maximum summon count
+     * @return The maximum summon count for this staff
+     */
+    public static int getStaffMaxSummons(SummonToolItem staff, PlayerMob player, InventoryItem hotbarItem, int playerMaxSummons) {
+        String staffName = staff.getDisplayName(hotbarItem);
+        
+        try {
+            // Try to get staff-specific summon count using reflection with correct parameters
+            java.lang.reflect.Method getMaxSummonsMethod = staff.getClass().getMethod("getMaxSummons", InventoryItem.class, necesse.entity.mobs.itemAttacker.ItemAttackerMob.class);
+            Object result = getMaxSummonsMethod.invoke(staff, hotbarItem, player);
+            
+            if (result instanceof Integer) {
+                int staffMax = (Integer) result;
+                // If staff has its own max summon count, use that directly (don't limit by player max)
+                System.out.println("[Auto Summon] Staff max summons: " + staffMax + " (using staff's own limit) - " + staffName);
+                return staffMax;
+            }
+        } catch (Exception e) {
+            // Method doesn't exist or failed, staff has no custom max summon count
+        }
+        
+        // If we get here, the staff doesn't have its own max summon count, so use player's max
+        System.out.println("[Auto Summon] Staff max summons: " + playerMaxSummons + " (using player max) - " + staffName);
+        return playerMaxSummons;
+    }
+
+    /**
      * This code runs after the original clientTick method.
      * It processes auto-summoning for the local player with proper multiplayer
      * isolation.
@@ -115,22 +162,22 @@ public class AutoSummonPatch {
             return; // Don't run if this player is on cooldown
         }
 
-        // Check if the player is below their max summon count
-        int currentSummons = 0;
-        for (necesse.entity.mobs.buffs.ActiveBuff buff : player.buffManager.getArrayBuffs()) {
-            if (buff.buff instanceof necesse.entity.mobs.buffs.staticBuffs.SummonedMobBuff) {
-                currentSummons += buff.getStacks();
-            }
-        }
-        int maxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
+        // Get current summon count more efficiently
+        int currentSummons = getCurrentSummonCount(player);
+        int playerMaxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
 
-        if (currentSummons < maxSummons) {
-            // Scan the hotbar from right to left (slot 9 to 0) to find the rightmost staff
-            for (int i = 9; i >= 0; i--) {
-                InventoryItem hotbarItem = player.getInv().main.getItem(i);
+        // Scan the hotbar from right to left (slot 9 to 0) to find the rightmost staff
+        for (int i = 9; i >= 0; i--) {
+            InventoryItem hotbarItem = player.getInv().main.getItem(i);
 
-                if (hotbarItem != null && hotbarItem.item instanceof SummonToolItem) {
-                    SummonToolItem staff = (SummonToolItem) hotbarItem.item;
+            if (hotbarItem != null && hotbarItem.item instanceof SummonToolItem) {
+                SummonToolItem staff = (SummonToolItem) hotbarItem.item;
+                
+                // Check if this staff has a custom summon count limit
+                int staffMaxSummons = getStaffMaxSummons(staff, player, hotbarItem, playerMaxSummons);
+                
+                // Only proceed if we're below the staff's limit
+                if (currentSummons < staffMaxSummons) {
                     String canAttackResult = staff.canAttack(player.getLevel(), (int) player.getX(),
                             (int) player.getY(), player, hotbarItem);
 
@@ -138,6 +185,7 @@ public class AutoSummonPatch {
                         // Final safety check: ensure this is still the local player
                         if (player.getLevel().getClient() != null
                                 && player.getLevel().getClient().getPlayer() == player) {
+                            
                             necesse.inventory.PlayerInventorySlot slot = new necesse.inventory.PlayerInventorySlot(
                                     player.getInv().main, i);
 
@@ -147,7 +195,7 @@ public class AutoSummonPatch {
                             try {
                                 player.doAndSendStopAttackAttacker(true);
                             } catch (Exception e) {
-                                // Ignore if method doesn't exist or fails
+                                // Method doesn't exist or failed, ignore
                             }
 
                             // Set the cooldown for this specific player to avoid using all staffs instantly
