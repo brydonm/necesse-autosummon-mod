@@ -312,8 +312,11 @@ public class AutoSummonPatch {
                     currentSummons = getCurrentSummonCountBuffBar(player);
                 }
                 
-                // Only proceed if we're below the staff's limit
-                if (currentSummons < staffMaxSummons) {
+                // Get the summon space taken for this staff
+                int summonCost = Math.round(staff.getSummonSpaceTaken(hotbarItem, player));
+                
+                // Only proceed if we have enough remaining capacity for at least one summon
+                if (currentSummons + summonCost <= staffMaxSummons) {
                     String canAttackResult = staff.canAttack(player.getLevel(), (int) player.getX(),
                             (int) player.getY(), player, hotbarItem);
 
