@@ -15,7 +15,7 @@ public class AutoSummonModSettings extends ModSettings {
     
     // Global custom summon limit for all staffs that have their own counters
     // If set to 0 or negative, uses the staff's default limit
-    private int globalCustomSummonLimit = 1;
+    private int globalCustomSummonLimit = 3;
     
     public AutoSummonModSettings() {
         super();
@@ -30,7 +30,7 @@ public class AutoSummonModSettings extends ModSettings {
     @Override
     public void applyLoadData(LoadData loadData) {
         isEnabled = loadData.getBoolean("autosummon_enabled", true); // Default to true if not found
-        globalCustomSummonLimit = loadData.getInt("global_custom_summon_limit", 1); // Default to 1
+        globalCustomSummonLimit = loadData.getInt("global_custom_summon_limit", 3); // Default to 3
     }
     
     /**

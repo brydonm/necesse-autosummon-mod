@@ -7,7 +7,7 @@ plugins {
 
 project.ext.modID = "streetnoodle.autosummon" // The unique id of your mod. Must be all lowercase and cannot use special characters.
 project.ext.modName = "Auto Summon" // The display name of your mod.
-project.ext.modVersion = "1.8" // Your current builds version. Must follow the xx.xx... format.
+project.ext.modVersion = "1.8.1" // Your current builds version. Must follow the xx.xx... format.
 project.ext.gameVersion = "1.0.1" // The target game version.
 project.ext.modDescription = "Automatically summons using the rightmost staff in your hotbar" // Short description of what your mod is.
 project.ext.author = "Street Noodle" // Your name

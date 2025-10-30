@@ -288,6 +288,11 @@ public class AutoSummonPatch {
         // Update tick counter
         playerTickCounters.put(playerId, tickCounter);
 
+        // Check if player is currently attacking - if so, don't interrupt
+        if (player.isAttacking) {
+            return; // Player is currently attacking, don't auto-summon
+        }
+
         int playerMaxSummons = player.buffManager.getModifier(necesse.entity.mobs.buffs.BuffModifiers.MAX_SUMMONS);
 
         // Scan the hotbar from right to left (slot 9 to 0) to find the rightmost staff
